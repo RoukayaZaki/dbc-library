@@ -1,0 +1,7 @@
+targets:
+  $default:
+    builders:
+      design_by_contract|contractBuilder:
+        generate_for:
+          include:
+            - lib/**/*.dart
