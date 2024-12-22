@@ -13,22 +13,42 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
         element: element,
       );
     }
+    for (var method in element.methods) {
+      if (!method.name.startsWith('_')) {
+        throw InvalidGenerationSourceError(
+          'Method should not be declared public.',
+          element: method,
+        );
+      }
+    }
 
-    final classElement = element as ClassElement;
     final invariants = annotation.peek('invariantAsserts')?.mapValue ?? {};
 
     // Collect all private methods with annotations
-    final privateMethods = classElement.methods.where((m) => m.name.startsWith('_'));
+    final privateMethods = element.methods.where((m) => m.name.startsWith('_'));
+
     final generatedMethods = privateMethods.map((method) {
       final preconditionAnnotation = _getAnnotation(method, Precondition);
       final postconditionAnnotation = _getAnnotation(method, Postcondition);
       final invariantAnnotation = _getAnnotation(method, Invariant);
 
-      return _generateMethod(method, preconditionAnnotation, postconditionAnnotation, invariantAnnotation, invariants);
+      if (preconditionAnnotation == null &&
+          postconditionAnnotation == null &&
+          invariantAnnotation == null) {
+        return '';
+      }
+
+      return _generateMethod(
+        method,
+        preconditionAnnotation,
+        postconditionAnnotation,
+        invariantAnnotation,
+        invariants,
+      );
     }).join('\n');
 
     return '''
-    class ${classElement.name} {
+    extension on ${element.name} {
       $generatedMethods
     }
     ''';
@@ -55,32 +75,14 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     final preconditions = precondition?.peek('asserts')?.mapValue ?? {};
     final postconditions = postcondition?.peek('asserts')?.mapValue ?? {};
 
-    final validationCode = StringBuffer();
-
-    // Add preconditions
-    preconditions.forEach((condition, message) {
-      validationCode.writeln('''
-      if (!(${condition?.toStringValue()})) {
-        throw AssertionError('${message?.toStringValue()}');
-      }
-      ''');
-    });
-
-    // Add class invariants before execution
-    classInvariants.forEach((condition, message) {
-      validationCode.writeln('''
-      if (!(${condition.toStringValue()})) {
-        throw AssertionError('${message.toStringValue()}');
-      }
-      ''');
-    });
-
     // Generate the method body
     final methodBody = '''
     ${method.returnType} ${method.name.replaceFirst('_', '')}(${method.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) {
-      $validationCode
-      final result = _${method.name}(${method.parameters.map((p) => p.name).join(', ')});
-      ${_generatePostconditionChecks(postconditions)}
+      ${_generateChecks(classInvariants)}
+      ${_generateChecks(preconditions)}
+      final result = ${method.name}(${method.parameters.map((p) => p.name).join(', ')});
+      ${_generateChecks(postconditions)}
+      ${_generateChecks(classInvariants)}
       return result;
     }
     ''';
@@ -88,16 +90,16 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     return methodBody;
   }
 
-  /// Generate postcondition checks.
-  String _generatePostconditionChecks(Map<dynamic, dynamic> postconditions) {
-    final postconditionChecks = StringBuffer();
-    postconditions.forEach((condition, message) {
-      postconditionChecks.writeln('''
-      if (!(${condition.toStringValue().replaceAll('result', 'result')})) {
+  String _generateChecks(Map<dynamic, dynamic> checks) {
+    final sb = StringBuffer();
+    checks.forEach((condition, message) {
+      sb.writeln('''
+      if (!(${condition.toStringValue()})) {
         throw AssertionError('${message.toStringValue()}');
       }
       ''');
     });
-    return postconditionChecks.toString();
+
+    return sb.toString();
   }
 }
