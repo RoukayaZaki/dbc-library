@@ -13,17 +13,25 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
         element: element,
       );
     }
-    for (var method in element.methods) {
-      if (!method.name.startsWith('_')) {
-        throw InvalidGenerationSourceError(
-          'Method should not be declared public.',
-          element: method,
-        );
-      }
-    }
+    // Commented for now as constructors has to be public
+    // for (var method in element.methods) {
+    //   if (!method.name.startsWith('_')) {
+    //     throw InvalidGenerationSourceError(
+    //       'Method should not be declared public.',
+    //       element: method,
+    //     );
+    //   }
+    // }
 
     final invariants = annotation.peek('invariantAsserts')?.mapValue ?? {};
 
+    // Generate wrappers for constructors
+    final constructorWrappers = element.constructors.map((constructor) {
+      return _generateConstructor(
+        constructor,
+        invariants,
+      );
+    }).join('\n');
     // Collect all private methods with annotations
     final privateMethods = element.methods.where((m) => m.name.startsWith('_'));
 
@@ -49,9 +57,34 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
 
     return '''
     extension on ${element.name} {
+      $constructorWrappers
       $generatedMethods
     }
     ''';
+  }
+
+  /// Generate wrapper for a constructor
+  String _generateConstructor(
+      ConstructorElement constructor, Map<dynamic, dynamic> classInvariants) {
+    final precondition = _getAnnotation(constructor, Precondition);
+    final postcondition = _getAnnotation(constructor, Postcondition);
+
+    final preconditions = precondition?.peek('asserts')?.mapValue ?? {};
+    final postconditions = postcondition?.peek('asserts')?.mapValue ?? {};
+
+    // Generate constructor wrapper body
+    final constructorBody = '''
+    factory ${constructor.enclosingElement.name}.${constructor.name ?? ''}(${constructor.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) {
+      ${_generateChecks(classInvariants)}
+      ${_generateChecks(preconditions)}
+      final instance = ${constructor.enclosingElement.name}.${constructor.name ?? ''}(${constructor.parameters.map((p) => p.name).join(', ')});
+      ${_generateChecks(postconditions)}
+      ${_generateChecks(classInvariants)}
+      return instance;
+    }
+    ''';
+
+    return constructorBody;
   }
 
   /// Get annotation of a specific type from the element.
