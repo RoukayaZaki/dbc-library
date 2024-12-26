@@ -58,9 +58,9 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     return '''
     extension on ${element.name} {
       $constructorWrappers
+     $generatedMethods
     }
     ''';
-    //  $generatedMethods
   }
 
   /// Generate wrapper for a constructor
@@ -72,18 +72,20 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     final preconditions = precondition?.peek('asserts')?.mapValue ?? {};
     final postconditions = postcondition?.peek('asserts')?.mapValue ?? {};
 
-    // Generate constructor wrapper body
-    final constructorBody = '''
-    factory ${constructor.enclosingElement.name}.${constructor.name ?? ''}(${constructor.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) {
-      ${_generateChecks(classInvariants)}
-      ${_generateChecks(preconditions)}
-      final instance = ${constructor.enclosingElement.name}.${constructor.name ?? ''}(${constructor.parameters.map((p) => p.name).join(', ')});
-      ${_generateChecks(postconditions)}
-      ${_generateChecks(classInvariants)}
-      return instance;
-    }
-    ''';
-    return constructorBody;
+    // Handle unnamed constructors
+    final constructorName =
+        constructor.name.isEmpty ? '' : '.${constructor.name}';
+
+    return '''
+  factory ${constructor.enclosingElement.name}$constructorName(${constructor.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) {
+    ${_generateChecks(classInvariants)}
+    ${_generateChecks(preconditions)}
+    final instance = ${constructor.enclosingElement.name}$constructorName(${constructor.parameters.map((p) => p.name).join(', ')});
+    ${_generateChecks(postconditions)}
+    ${_generateChecks(classInvariants)}
+    return instance;
+  }
+  ''';
   }
 
   /// Get annotation of a specific type from the element.
