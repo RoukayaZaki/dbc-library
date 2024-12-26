@@ -83,7 +83,7 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
       return instance;
     }
     ''';
-
+    print(constructor.enclosingElement.name);
     return constructorBody;
   }
 
