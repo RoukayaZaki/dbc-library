@@ -58,9 +58,9 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     return '''
     extension on ${element.name} {
       $constructorWrappers
-      $generatedMethods
     }
     ''';
+    //  $generatedMethods
   }
 
   /// Generate wrapper for a constructor
@@ -83,7 +83,6 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
       return instance;
     }
     ''';
-    print(constructor.enclosingElement.name);
     return constructorBody;
   }
 
