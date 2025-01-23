@@ -48,7 +48,7 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     }).join('\n');
 
     return '''
-    extension on ${element.name} {
+    extension ${element.name}Extension  on ${element.name} {
       $generatedMethods
     }
     ''';
