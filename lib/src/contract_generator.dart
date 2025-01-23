@@ -112,7 +112,7 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
 
     // Generate the method body
     final methodBody = '''
-    ${method.returnType} ${method.name.replaceFirst('_', '')}(${method.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) {
+    ${method.returnType} ${method.name.replaceFirst('_', '')}(${method.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) ${method.isAsynchronous ? 'async' : ''} {
       ${_generateChecks(classInvariants)}
       ${_generateChecks(preconditions)}
       final result = ${method.isAsynchronous ? 'await' : ''} ${method.name}(${method.parameters.map((p) => p.name).join(', ')});
