@@ -61,7 +61,7 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     }
     ''';
     // ommitting the constructor wrappers for now as they can't be introduced in the extension
-      // $constructorWrappers
+    // $constructorWrappers
   }
 
   /// Generate wrapper for a constructor
@@ -115,7 +115,7 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     ${method.returnType} ${method.name.replaceFirst('_', '')}(${method.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) {
       ${_generateChecks(classInvariants)}
       ${_generateChecks(preconditions)}
-      final result = ${method.name}(${method.parameters.map((p) => p.name).join(', ')});
+      final result = ${method.isAsynchronous ? 'await' : ''} ${method.name}(${method.parameters.map((p) => p.name).join(', ')});
       ${_generateChecks(postconditions)}
       ${_generateChecks(classInvariants)}
       return result;
