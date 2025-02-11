@@ -13,25 +13,18 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
         element: element,
       );
     }
-    // Commented for now as constructors has to be public
-    // for (var method in element.methods) {
-    //   if (!method.name.startsWith('_')) {
-    //     throw InvalidGenerationSourceError(
-    //       'Method should not be declared public.',
-    //       element: method,
-    //     );
-    //   }
-    // }
+
+    for (var method in element.methods) {
+      if (!method.name.startsWith('_')) {
+        throw InvalidGenerationSourceError(
+          'Method should not be declared public.',
+          element: method,
+        );
+      }
+    }
 
     final invariants = annotation.peek('invariantAsserts')?.mapValue ?? {};
 
-    // Generate wrappers for constructors
-    final constructorWrappers = element.constructors.map((constructor) {
-      return _generateConstructor(
-        constructor,
-        invariants,
-      );
-    }).join('\n');
     // Collect all private methods with annotations
     final privateMethods = element.methods.where((m) => m.name.startsWith('_'));
 
@@ -55,38 +48,17 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
       );
     }).join('\n');
 
+    final String? constrPreconditionAsserts =
+        _generateConstructorPrecondition(element);
+
     return '''
     extension ${element.name}Extension  on ${element.name} {
+      ${constrPreconditionAsserts != null ? constrPreconditionAsserts : ''}
       $generatedMethods
     }
     ''';
     // ommitting the constructor wrappers for now as they can't be introduced in the extension
     // $constructorWrappers
-  }
-
-  /// Generate wrapper for a constructor
-  String _generateConstructor(
-      ConstructorElement constructor, Map<dynamic, dynamic> classInvariants) {
-    final precondition = _getAnnotation(constructor, Precondition);
-    final postcondition = _getAnnotation(constructor, Postcondition);
-
-    final preconditions = precondition?.peek('asserts')?.mapValue ?? {};
-    final postconditions = postcondition?.peek('asserts')?.mapValue ?? {};
-
-    // Handle unnamed constructors
-    final constructorName =
-        constructor.name.isEmpty ? '' : '.${constructor.name}';
-
-    return '''
-  factory ${constructor.enclosingElement.name}$constructorName(${constructor.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) {
-    ${_generateChecks(classInvariants)}
-    ${_generateChecks(preconditions)}
-    final instance = ${constructor.enclosingElement.name}$constructorName(${constructor.parameters.map((p) => p.name).join(', ')});
-    ${_generateChecks(postconditions)}
-    ${_generateChecks(classInvariants)}
-    return instance;
-  }
-  ''';
   }
 
   /// Get annotation of a specific type from the element.
@@ -98,6 +70,34 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
       }
     }
     return null;
+  }
+
+  String? _generateConstructorPrecondition(
+    ClassElement el,
+  ) {
+    if (el.constructors.isEmpty) return null;
+    final result = el.constructors.map((constructor) {
+      final precondition = _getAnnotation(constructor, Precondition);
+      if (precondition == null) return '';
+
+      final preconditions = precondition.peek('asserts')?.mapValue ?? {};
+
+      String name = constructor.name;
+      if (name.isNotEmpty) {
+        name =
+            constructor.name[0].toUpperCase() + constructor.name.substring(1);
+      }
+
+      return '''
+      void _ensure${name}() {
+        ${_generateChecks(preconditions)}
+      }
+      ''';
+    }).join('\n');
+
+    if (result.trim().isEmpty) return null;
+
+    return result;
   }
 
   /// Generate method with preconditions, postconditions, and invariants.
