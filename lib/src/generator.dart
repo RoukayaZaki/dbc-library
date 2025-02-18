@@ -3,6 +3,6 @@ import 'contract_generator.dart';
 import 'package:source_gen/source_gen.dart';
 
 Builder contractBuilder(BuilderOptions options) => SharedPartBuilder(
-      [ContractGenerator()],
+      [ContractGenerator(), FunctionContractGenerator()],
       'contract_generator',
     );
