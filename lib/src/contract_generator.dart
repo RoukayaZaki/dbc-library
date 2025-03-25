@@ -157,11 +157,8 @@ String _generateExecutable<T extends ExecutableElement>(
 String _generateChecks(Map<dynamic, dynamic> checks) {
   final sb = StringBuffer();
   checks.forEach((condition, message) {
-    sb.writeln('''
-      if (!(${condition.toStringValue()})) {
-        throw AssertionError('${message.toStringValue()}');
-      }
-      ''');
+    sb.writeln('assert(${condition.toStringValue()}, "${message.toStringValue()}");');
+
   });
 
   return sb.toString();
