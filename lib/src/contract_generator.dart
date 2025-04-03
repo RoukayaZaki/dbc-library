@@ -236,12 +236,7 @@ String _generatePostconditionChecks(Map<dynamic, dynamic> postconditions) {
     String conditionStr = condition.toStringValue() ?? '';
     conditionStr = conditionStr.replaceAllMapped(
         oldFunctionRegex, (match) => 'old(\'${match.group(1)!.trim()}\')');
-
-    sb.writeln('''
-      if (!(${conditionStr})) {
-        throw AssertionError('${message.toStringValue()}');
-      }
-      ''');
+    sb.writeln('assert(${condition.toStringValue()}, "${message.toStringValue()}");');
   });
 
   return sb.toString();
