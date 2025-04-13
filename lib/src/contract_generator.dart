@@ -1,14 +1,12 @@
-// Integrated Implementation for Approach 2: Capturing specific field values
-// This file modifies the existing generator to support the old() function feature
-
+import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/constant/value.dart';
 import 'package:source_gen/source_gen.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:build/build.dart';
 import 'package:design_by_contract/annotation.dart';
+import 'package:analyzer/dart/analysis/utilities.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 
-final RegExp oldFunctionRegex =
-    RegExp(r'old\(((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*)\)');
 
 class FunctionContractGenerator
     extends GeneratorForAnnotation<FunctionContract> {
@@ -134,6 +132,94 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
   }
 }
 
+class _OldInvocationCollector extends RecursiveAstVisitor<void> {
+  final List<MethodInvocation> invocations;
+  _OldInvocationCollector(this.invocations);
+
+  @override
+  void visitMethodInvocation(MethodInvocation node) {
+    if (node.methodName.name == 'old') {
+      invocations.add(node);
+    }
+    super.visitMethodInvocation(node);
+  }
+}
+
+Set<String> _extractOldArguments(String condition) {
+  const String prefix = 'var _ = ';
+  final String code = '$prefix$condition;';
+  final parseResult = parseString(content: code, throwIfDiagnostics: false);
+  final unit = parseResult.unit;
+  final collector = _OldInvocationCollector([]);
+  unit.visitChildren(collector);
+  return collector.invocations
+      .map((inv) => inv.argumentList.arguments.first.toSource().trim())
+      .toSet();
+}
+
+String _transformOldInvocations(String condition) {
+  const String prefix = 'var _ = ';
+  final String fullCode = '$prefix$condition;';
+  final parseResult = parseString(content: fullCode, throwIfDiagnostics: false);
+  final unit = parseResult.unit;
+  final collector = _OldInvocationCollector([]);
+  unit.visitChildren(collector);
+  final invocations = collector.invocations
+    ..sort((a, b) => a.offset.compareTo(b.offset));
+
+  final conditionStartOffset = prefix.length;
+  final buffer = StringBuffer();
+  int lastPos = 0;
+  for (final invocation in invocations) {
+    final relativeStart = invocation.offset - conditionStartOffset;
+    final relativeEnd = invocation.end - conditionStartOffset;
+    buffer.write(condition.substring(lastPos, relativeStart));
+    final argumentText =
+        invocation.argumentList.arguments.first.toSource().trim();
+    buffer.write("old('$argumentText')");
+    lastPos = relativeEnd;
+  }
+  buffer.write(condition.substring(lastPos));
+  return buffer.toString();
+}
+
+String _generateExecutable<T extends ExecutableElement>(
+  T executable, {
+  Map<DartObject?, DartObject?> preconditions = const {},
+  Map<DartObject?, DartObject?> postconditions = const {},
+  Map<dynamic, dynamic>? classInvariants,
+}) {
+  final oldExpressions = <String>{};
+  postconditions.keys.forEach((key) {
+    final condition = key?.toStringValue() ?? '';
+    final oldArgs = _extractOldArguments(condition);
+    oldExpressions.addAll(oldArgs);
+  });
+
+  final captureOldValues = oldExpressions.map((expr) {
+    return '_captureValue(\'$expr\', $expr);';
+  }).join('\n      ');
+
+  String typeParams = '';
+  if (executable.typeParameters.isNotEmpty) {
+    typeParams = '<${executable.typeParameters.join(', ')}>';
+  }
+
+  final executableBody = '''
+    ${executable.returnType} ${executable.name.replaceFirst('_', '')}$typeParams(${executable.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) ${executable.isAsynchronous ? 'async' : ''} {
+      ${classInvariants != null ? _generateChecks(classInvariants) : ''}
+      ${_generateChecks(preconditions)}
+      ${oldExpressions.isNotEmpty ? '// Capture values before method execution\n      $captureOldValues' : ''}
+      final result = ${executable.isAsynchronous ? 'await' : ''} ${executable.name}(${executable.parameters.map((p) => p.name).join(', ')});
+      ${_generatePostconditionChecks(postconditions)}
+      ${classInvariants != null ? _generateChecks(classInvariants) : ''}
+      ${oldExpressions.isNotEmpty ? '// Clear captured values after method execution\n      _clearOldValues();' : ''}
+      return result;
+    }
+    ''';
+  return executableBody;
+}
+
 ConstantReader? _getAnnotation(Element element, Type type) {
   for (final metadata in element.metadata) {
     final value = metadata.computeConstantValue();
@@ -171,53 +257,6 @@ String? _generateConstructorPrecondition(
   return result;
 }
 
-/// Generate executable with preconditions, postconditions, and invariants.
-/// Modified to support old() function for postconditions
-String _generateExecutable<T extends ExecutableElement>(
-  T executable, {
-  Map<DartObject?, DartObject?> preconditions = const {},
-  Map<DartObject?, DartObject?> postconditions = const {},
-  Map<dynamic, dynamic>? classInvariants = null,
-}) {
-  // Extract expressions inside old() calls from postconditions
-  final oldExpressions = <String>{};
-  postconditions.keys.forEach((key) {
-    final condition = key?.toStringValue() ?? '';
-    final matches = oldFunctionRegex.allMatches(condition);
-    for (final match in matches) {
-      if (match.groupCount >= 1) {
-        oldExpressions.add(match.group(1)!.trim());
-      }
-    }
-  });
-
-  // Generate code to capture old values
-  final captureOldValues = oldExpressions.map((expr) {
-    return '_captureValue(\'$expr\', $expr);';
-  }).join('\n      ');
-
-  String typeParams = '';
-
-  if (executable.typeParameters.isNotEmpty) {
-    typeParams = '<${executable.typeParameters.join(', ')}>';
-  }
-
-  final executableBody = '''
-    ${executable.returnType} ${executable.name.replaceFirst('_', '')}${typeParams}(${executable.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) ${executable.isAsynchronous ? 'async' : ''} {
-      ${classInvariants != null ? _generateChecks(classInvariants) : ''}
-      ${_generateChecks(preconditions)}
-      ${oldExpressions.isNotEmpty ? '// Capture values before method execution\n      $captureOldValues' : ''}
-      final result = ${executable.isAsynchronous ? 'await' : ''} ${executable.name}(${executable.parameters.map((p) => p.name).join(', ')});
-      ${_generatePostconditionChecks(postconditions)}
-      ${classInvariants != null ? _generateChecks(classInvariants) : ''}
-      ${oldExpressions.isNotEmpty ? '// Clear captured values after method execution\n      _clearOldValues();' : ''}
-      return result;
-    }
-    ''';
-
-  return executableBody;
-}
-
 String _generateChecks(Map<dynamic, dynamic> checks) {
   final sb = StringBuffer();
   checks.forEach((condition, message) {
@@ -228,16 +267,12 @@ String _generateChecks(Map<dynamic, dynamic> checks) {
   return sb.toString();
 }
 
-// New method to handle postcondition checks with old() function calls
 String _generatePostconditionChecks(Map<dynamic, dynamic> postconditions) {
   final sb = StringBuffer();
   postconditions.forEach((condition, message) {
-    // Replace old(expr) with old('expr') to match implementation
     String conditionStr = condition.toStringValue() ?? '';
-    conditionStr = conditionStr.replaceAllMapped(
-        oldFunctionRegex, (match) => 'old(\'${match.group(1)!.trim()}\')');
-    sb.writeln('assert(${conditionStr}, "${message.toStringValue()}");');
+    conditionStr = _transformOldInvocations(conditionStr);
+    sb.writeln('assert($conditionStr, "${message.toStringValue()}");');
   });
-
   return sb.toString();
 }
