@@ -1,12 +1,93 @@
+import 'package:analyzer/dart/analysis/utilities.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/constant/value.dart';
 import 'package:source_gen/source_gen.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:build/build.dart';
 import 'package:design_by_contract/annotation.dart';
-import 'package:analyzer/dart/analysis/utilities.dart';
-import 'package:analyzer/dart/ast/ast.dart';
 
+class _OldInvocationCollector extends RecursiveAstVisitor<void> {
+  final List<MethodInvocation> invocations;
+  _OldInvocationCollector(this.invocations);
+
+  @override
+  void visitMethodInvocation(MethodInvocation node) {
+    if (node.methodName.name == 'old') {
+      // We expect exactly one argument.
+      if (node.argumentList.arguments.length != 1) {
+        throw InvalidGenerationSourceError(
+          'The old() function must have exactly one argument, but found: ${node.argumentList.arguments.length}',
+          element: null,
+        );
+      }
+      invocations.add(node);
+    }
+    super.visitMethodInvocation(node);
+  }
+}
+
+Set<String> extractOldArguments(String condition) {
+  const String prefix = 'var _ = ';
+  final String code = '$prefix$condition;';
+  final parseResult = parseString(content: code, throwIfDiagnostics: false);
+  final unit = parseResult.unit;
+  final collector = _OldInvocationCollector([]);
+
+  unit.visitChildren(collector);
+
+  return collector.invocations.map((inv) {
+    final arg = inv.argumentList.arguments.first;
+    if (arg is SimpleIdentifier) {
+      return arg.name;
+    } else if (arg is PrefixedIdentifier && arg.prefix.name == 'this') {
+      return arg.identifier.name;
+    } else {
+      throw InvalidGenerationSourceError(
+        'The argument to old() must be a direct field reference (e.g. "old(field)" or "old(this.field)"), '
+        'but found: ${arg.toSource()}',
+        element: null,
+      );
+    }
+  }).toSet();
+}
+
+String transformOldInvocations(String condition) {
+  const String prefix = 'var _ = ';
+  final String fullCode = '$prefix$condition;';
+  final parseResult = parseString(content: fullCode, throwIfDiagnostics: false);
+  final unit = parseResult.unit;
+  final collector = _OldInvocationCollector([]);
+  unit.visitChildren(collector);
+  final invocations = collector.invocations
+    ..sort((a, b) => a.offset.compareTo(b.offset));
+
+  final conditionStartOffset = prefix.length;
+  final buffer = StringBuffer();
+  int lastPos = 0;
+  for (final invocation in invocations) {
+    final relativeStart = invocation.offset - conditionStartOffset;
+    final relativeEnd = invocation.end - conditionStartOffset;
+    buffer.write(condition.substring(lastPos, relativeStart));
+    final arg = invocation.argumentList.arguments.first;
+    String fieldName;
+    if (arg is SimpleIdentifier) {
+      fieldName = arg.name;
+    } else if (arg is PrefixedIdentifier && arg.prefix.name == 'this') {
+      fieldName = arg.identifier.name;
+    } else {
+      throw InvalidGenerationSourceError(
+        'Invalid argument for old() invocation: ${arg.toSource()}. Only direct field references are allowed.',
+        element: null,
+      );
+    }
+    buffer.write("old('$fieldName')");
+    lastPos = relativeEnd;
+  }
+  // Append any remaining part of the condition.
+  buffer.write(condition.substring(lastPos));
+  return buffer.toString();
+}
 
 class FunctionContractGenerator
     extends GeneratorForAnnotation<FunctionContract> {
@@ -60,7 +141,6 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
 
     final invariants = annotation.peek('invariantAsserts')?.mapValue ?? {};
 
-    // Collect all private methods with annotations
     final privateMethods = element.methods.where((m) => m.name.startsWith('_'));
 
     final generatedMethods = privateMethods.map((method) {
@@ -132,55 +212,37 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
   }
 }
 
-class _OldInvocationCollector extends RecursiveAstVisitor<void> {
-  final List<MethodInvocation> invocations;
-  _OldInvocationCollector(this.invocations);
-
-  @override
-  void visitMethodInvocation(MethodInvocation node) {
-    if (node.methodName.name == 'old') {
-      invocations.add(node);
+ConstantReader? _getAnnotation(Element element, Type type) {
+  for (final metadata in element.metadata) {
+    final value = metadata.computeConstantValue();
+    if (value?.type?.element?.name == type.toString()) {
+      return ConstantReader(value);
     }
-    super.visitMethodInvocation(node);
   }
+  return null;
 }
 
-Set<String> _extractOldArguments(String condition) {
-  const String prefix = 'var _ = ';
-  final String code = '$prefix$condition;';
-  final parseResult = parseString(content: code, throwIfDiagnostics: false);
-  final unit = parseResult.unit;
-  final collector = _OldInvocationCollector([]);
-  unit.visitChildren(collector);
-  return collector.invocations
-      .map((inv) => inv.argumentList.arguments.first.toSource().trim())
-      .toSet();
-}
+String? _generateConstructorPrecondition(ClassElement el) {
+  if (el.constructors.isEmpty) return null;
+  final result = el.constructors.map((constructor) {
+    final precondition = _getAnnotation(constructor, Precondition);
+    if (precondition == null) return '';
 
-String _transformOldInvocations(String condition) {
-  const String prefix = 'var _ = ';
-  final String fullCode = '$prefix$condition;';
-  final parseResult = parseString(content: fullCode, throwIfDiagnostics: false);
-  final unit = parseResult.unit;
-  final collector = _OldInvocationCollector([]);
-  unit.visitChildren(collector);
-  final invocations = collector.invocations
-    ..sort((a, b) => a.offset.compareTo(b.offset));
+    final preconditions = precondition.peek('asserts')?.mapValue ?? {};
+    String name = constructor.name;
+    if (name.isNotEmpty) {
+      name = constructor.name[0].toUpperCase() + constructor.name.substring(1);
+    }
 
-  final conditionStartOffset = prefix.length;
-  final buffer = StringBuffer();
-  int lastPos = 0;
-  for (final invocation in invocations) {
-    final relativeStart = invocation.offset - conditionStartOffset;
-    final relativeEnd = invocation.end - conditionStartOffset;
-    buffer.write(condition.substring(lastPos, relativeStart));
-    final argumentText =
-        invocation.argumentList.arguments.first.toSource().trim();
-    buffer.write("old('$argumentText')");
-    lastPos = relativeEnd;
-  }
-  buffer.write(condition.substring(lastPos));
-  return buffer.toString();
+    return '''
+      void _ensure${name}() {
+        ${_generateChecks(preconditions)}
+      }
+      ''';
+  }).join('\n');
+
+  if (result.trim().isEmpty) return null;
+  return result;
 }
 
 String _generateExecutable<T extends ExecutableElement>(
@@ -192,9 +254,23 @@ String _generateExecutable<T extends ExecutableElement>(
   final oldExpressions = <String>{};
   postconditions.keys.forEach((key) {
     final condition = key?.toStringValue() ?? '';
-    final oldArgs = _extractOldArguments(condition);
-    oldExpressions.addAll(oldArgs);
+    final extracted = extractOldArguments(condition);
+    oldExpressions.addAll(extracted);
   });
+
+  if (executable.enclosingElement3 is ClassElement) {
+    final classElem = executable.enclosingElement3 as ClassElement;
+    for (final oldField in oldExpressions) {
+      final fieldExists = classElem.fields.any((f) => f.name == oldField) ||
+          classElem.accessors.any((a) => a.isGetter && a.name == oldField);
+      if (!fieldExists) {
+        throw InvalidGenerationSourceError(
+          'The old() function expects a field reference, but "$oldField" is not a field in class ${classElem.name}.',
+          element: executable,
+        );
+      }
+    }
+  }
 
   final captureOldValues = oldExpressions.map((expr) {
     return '_captureValue(\'$expr\', $expr);';
@@ -217,44 +293,18 @@ String _generateExecutable<T extends ExecutableElement>(
       return result;
     }
     ''';
+
   return executableBody;
 }
 
-ConstantReader? _getAnnotation(Element element, Type type) {
-  for (final metadata in element.metadata) {
-    final value = metadata.computeConstantValue();
-    if (value?.type?.element?.name == type.toString()) {
-      return ConstantReader(value);
-    }
-  }
-  return null;
-}
-
-String? _generateConstructorPrecondition(
-  ClassElement el,
-) {
-  if (el.constructors.isEmpty) return null;
-  final result = el.constructors.map((constructor) {
-    final precondition = _getAnnotation(constructor, Precondition);
-    if (precondition == null) return '';
-
-    final preconditions = precondition.peek('asserts')?.mapValue ?? {};
-
-    String name = constructor.name;
-    if (name.isNotEmpty) {
-      name = constructor.name[0].toUpperCase() + constructor.name.substring(1);
-    }
-
-    return '''
-      void _ensure${name}() {
-        ${_generateChecks(preconditions)}
-      }
-      ''';
-  }).join('\n');
-
-  if (result.trim().isEmpty) return null;
-
-  return result;
+String _generatePostconditionChecks(Map<dynamic, dynamic> postconditions) {
+  final sb = StringBuffer();
+  postconditions.forEach((condition, message) {
+    String conditionStr = condition.toStringValue() ?? '';
+    conditionStr = transformOldInvocations(conditionStr);
+    sb.writeln('assert($conditionStr, "${message.toStringValue()}");');
+  });
+  return sb.toString();
 }
 
 String _generateChecks(Map<dynamic, dynamic> checks) {
@@ -262,17 +312,6 @@ String _generateChecks(Map<dynamic, dynamic> checks) {
   checks.forEach((condition, message) {
     sb.writeln(
         'assert(${condition.toStringValue()}, "${message.toStringValue()}");');
-  });
-
-  return sb.toString();
-}
-
-String _generatePostconditionChecks(Map<dynamic, dynamic> postconditions) {
-  final sb = StringBuffer();
-  postconditions.forEach((condition, message) {
-    String conditionStr = condition.toStringValue() ?? '';
-    conditionStr = _transformOldInvocations(conditionStr);
-    sb.writeln('assert($conditionStr, "${message.toStringValue()}");');
   });
   return sb.toString();
 }
