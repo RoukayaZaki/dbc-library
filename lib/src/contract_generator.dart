@@ -162,9 +162,14 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     final String? constrPreconditionAsserts =
         _generateConstructorPrecondition(element);
 
-    final String typeParams = '<${element.typeParameters.join(', ')}>';
-    final String typeParamsNoBounds =
-        '<${element.typeParameters.map((p) => p.name).join(', ')}>';
+    final hasTypeParams = element.typeParameters.isNotEmpty;
+    final String typeParams = hasTypeParams
+        ? '<${element.typeParameters.join(', ')}>'
+        : '';
+    final String typeParamsNoBounds = hasTypeParams
+        ? '<${element.typeParameters.map((p) => p.name).join(', ')}>'
+        : '';
+
 
     return '''
     // Add a map to store old values for specific expressions
