@@ -14,7 +14,6 @@ class _OldInvocationCollector extends RecursiveAstVisitor<void> {
   @override
   void visitMethodInvocation(MethodInvocation node) {
     if (node.methodName.name == 'old') {
-      // We expect exactly one argument.
       if (node.argumentList.arguments.length != 1) {
         throw InvalidGenerationSourceError(
           'The old() function must have exactly one argument, but found: ${node.argumentList.arguments.length}',
@@ -84,7 +83,7 @@ String transformOldInvocations(String condition) {
     buffer.write("old('$fieldName')");
     lastPos = relativeEnd;
   }
-  // Append any remaining part of the condition.
+
   buffer.write(condition.substring(lastPos));
   return buffer.toString();
 }
@@ -98,12 +97,6 @@ class FunctionContractGenerator
       print(element.runtimeType);
       throw InvalidGenerationSourceError(
         'The @FunctionContract annotation can only be applied to functions.',
-        element: element,
-      );
-    }
-    if (!element.name.startsWith('_')) {
-      throw InvalidGenerationSourceError(
-        'Function should not be declared public.',
         element: element,
       );
     }
