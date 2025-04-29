@@ -123,19 +123,18 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
       );
     }
 
-    for (var method in element.methods) {
-      if (!method.name.startsWith('_')) {
-        throw InvalidGenerationSourceError(
-          'Method should not be declared public.',
-          element: method,
-        );
-      }
-    }
-
     final invariants = annotation.peek('invariantAsserts')?.mapValue ?? {};
 
     final privateMethods = element.methods.where((m) => m.name.startsWith('_'));
 
+    for (var method in privateMethods) {
+      if (!method.name.startsWith('_')) {
+        throw InvalidGenerationSourceError(
+          'Annotated method should not be declared public.',
+          element: method,
+        );
+      }
+    }
     final generatedMethods = privateMethods.map((method) {
       final preconditionAnnotation = _getAnnotation(method, Precondition);
       final postconditionAnnotation = _getAnnotation(method, Postcondition);
@@ -163,13 +162,11 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
         _generateConstructorPrecondition(element);
 
     final hasTypeParams = element.typeParameters.isNotEmpty;
-    final String typeParams = hasTypeParams
-        ? '<${element.typeParameters.join(', ')}>'
-        : '';
+    final String typeParams =
+        hasTypeParams ? '<${element.typeParameters.join(', ')}>' : '';
     final String typeParamsNoBounds = hasTypeParams
         ? '<${element.typeParameters.map((p) => p.name).join(', ')}>'
         : '';
-
 
     return '''
     // Add a map to store old values for specific expressions
