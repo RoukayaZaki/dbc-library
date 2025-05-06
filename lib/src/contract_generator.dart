@@ -122,20 +122,16 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
         element: element,
       );
     }
+    if (!element.name.startsWith('_')) {
+      throw InvalidGenerationSourceError(
+        'The @Contract annotation can only be applied to private class',
+        element: element,
+      );
+    }
 
     final invariants = annotation.peek('invariantAsserts')?.mapValue ?? {};
 
-    final privateMethods = element.methods.where((m) => m.name.startsWith('_'));
-
-    for (var method in privateMethods) {
-      if (!method.name.startsWith('_')) {
-        throw InvalidGenerationSourceError(
-          'Annotated method should not be declared public.',
-          element: method,
-        );
-      }
-    }
-    final generatedMethods = privateMethods.map((method) {
+    final generatedMethods = element.methods.map((method) {
       final preconditionAnnotation = _getAnnotation(method, Precondition);
       final postconditionAnnotation = _getAnnotation(method, Postcondition);
       final invariantAnnotation = _getAnnotation(method, Invariant);
@@ -169,36 +165,21 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
         : '';
 
     return '''
-    // Add a map to store old values for specific expressions
-    extension ${element.name}Extension${typeParams} on ${element.name}${typeParamsNoBounds} {
-      // Map to store old values before method execution
-      static final Map<String, dynamic> _oldValues = {};
+    class ${element.name.replaceFirst('_', '')}${typeParams} extends ${element.name}${typeParamsNoBounds} {
       
-      void _captureValue(String expression, dynamic value) {
+      void _captureValue(Map<String, dynamic> oldValues, String expression, dynamic value) {
         if (value == null || value is int || value is double || value is bool || value is String) {
-          // Primitives can be stored directly
-          _oldValues[expression] = value;
+          oldValues[expression] = value;
         } else if (value is List) {
-          _oldValues[expression] = List.from(value);
+          oldValues[expression] = List.from(value);
         } else if (value is Map) {
-          _oldValues[expression] = Map.from(value);
+          oldValues[expression] = Map.from(value);
         } else if (value is Set) {
-          _oldValues[expression] = Set.from(value);
+          oldValues[expression] = Set.from(value);
         }
       }
       
-      // Method to retrieve a captured value
-      dynamic old(String expression) {
-        if (!_oldValues.containsKey(expression)) {
-          throw StateError('No value captured for expression: \$expression');
-        }
-        return _oldValues[expression];
-      }
       
-      // Method to clear all captured values
-      void _clearOldValues() {
-        _oldValues.clear();
-      }
       
       ${constrPreconditionAsserts != null ? constrPreconditionAsserts : ''}
       $generatedMethods
@@ -220,19 +201,18 @@ ConstantReader? _getAnnotation(Element element, Type type) {
 String? _generateConstructorPrecondition(ClassElement el) {
   if (el.constructors.isEmpty) return null;
   final result = el.constructors.map((constructor) {
-    final precondition = _getAnnotation(constructor, Precondition);
-    if (precondition == null) return '';
+    final preconditions =
+        _getAnnotation(constructor, Precondition)?.peek('asserts')?.mapValue ??
+            {};
 
-    final preconditions = precondition.peek('asserts')?.mapValue ?? {};
-    String name = constructor.name;
-    if (name.isNotEmpty) {
-      name = constructor.name[0].toUpperCase() + constructor.name.substring(1);
-    }
+    final parmasAndArgs = extractParameterStrings(constructor.parameters);
+    final checks = preconditions.entries.map((entry) {
+      return 'assert(${entry.key!.toStringValue()}, "${entry.value!.toStringValue()}"),';
+    }).join('');
 
+    print(constructor.parameters);
     return '''
-      void _ensure${name}() {
-        ${_generateChecks(preconditions)}
-      }
+      ${el.name.replaceFirst('_', '')}${constructor.name.isNotEmpty ? '.${constructor.name}' : ''}(${parmasAndArgs.$1}) : $checks super(${parmasAndArgs.$2});
       ''';
   }).join('\n');
 
@@ -268,23 +248,37 @@ String _generateExecutable<T extends ExecutableElement>(
   }
 
   final captureOldValues = oldExpressions.map((expr) {
-    return '_captureValue(\'$expr\', $expr);';
-  }).join('\n      ');
+    return '_captureValue(_\$oldValues, \'$expr\', $expr);';
+  }).join('\n');
 
   String typeParams = '';
   if (executable.typeParameters.isNotEmpty) {
     typeParams = '<${executable.typeParameters.join(', ')}>';
   }
 
+  final isMethod = executable is MethodElement;
+
+  final oldFun = '''
+      final Map<String, dynamic> _\$oldValues = {};
+      dynamic old(String expression) {
+        if (!_\$oldValues.containsKey(expression)) {
+          throw StateError('No value captured for expression: \$expression');
+        }
+        return _\$oldValues[expression];
+      }\n''';
+
+  final paramsAndArgs = extractParameterStrings(executable.parameters);
+
   final executableBody = '''
-    ${executable.returnType} ${executable.name.replaceFirst('_', '')}$typeParams(${executable.parameters.map((p) => '${p.type} ${p.name}').join(', ')}) ${executable.isAsynchronous ? 'async' : ''} {
+    ${isMethod ? '@override' : ''}
+    ${executable.returnType} ${isMethod ? executable.name : executable.name.replaceFirst('_', '')}$typeParams(${paramsAndArgs.$1}) ${executable.isAsynchronous ? 'async' : ''} {
+      ${isMethod && oldExpressions.isNotEmpty ? oldFun : ''}
       ${classInvariants != null ? _generateChecks(classInvariants) : ''}
       ${_generateChecks(preconditions)}
-      ${oldExpressions.isNotEmpty ? '// Capture values before method execution\n      $captureOldValues' : ''}
-      final result = ${executable.isAsynchronous ? 'await' : ''} ${executable.name}(${executable.parameters.map((p) => p.name).join(', ')});
+      ${oldExpressions.isNotEmpty ? captureOldValues : ''}
+      final result = ${executable.isAsynchronous ? 'await' : ''} ${isMethod ? 'super.' : ''}${executable.name}(${paramsAndArgs.$2});
       ${_generatePostconditionChecks(postconditions)}
       ${classInvariants != null ? _generateChecks(classInvariants) : ''}
-      ${oldExpressions.isNotEmpty ? '// Clear captured values after method execution\n      _clearOldValues();' : ''}
       return result;
     }
     ''';
@@ -309,4 +303,61 @@ String _generateChecks(Map<dynamic, dynamic> checks) {
         'assert(${condition.toStringValue()}, "${message.toStringValue()}");');
   });
   return sb.toString();
+}
+
+(String, String) extractParameterStrings(List<ParameterElement> parameters) {
+  final positionalRequired = <String>[];
+  final positionalOptional = <String>[];
+  final named = <String>[];
+
+  final positionalArgs = <String>[];
+  final namedArgs = <String>[];
+
+  for (final param in parameters) {
+    final name = param.name;
+    final type = param.type.getDisplayString();
+    final hasDefault = param.defaultValueCode != null;
+
+    final defaultValue = hasDefault ? ' = ${param.defaultValueCode}' : '';
+    final decl = '$type $name$defaultValue';
+
+    if (param.isNamed) {
+      if (param.isRequiredNamed) {
+        named.add('required $type $name');
+      } else {
+        named.add(decl);
+      }
+      namedArgs.add('$name: $name');
+    } else if (param.isOptionalPositional) {
+      positionalOptional.add(decl);
+      positionalArgs.add(name);
+    } else {
+      positionalRequired.add('$type $name');
+      positionalArgs.add(name);
+    }
+  }
+
+  final buffer = StringBuffer();
+  if (positionalRequired.isNotEmpty) {
+    buffer.writeAll(positionalRequired, ', ');
+  }
+  if (positionalOptional.isNotEmpty) {
+    if (buffer.isNotEmpty) buffer.write(', ');
+    buffer.write('[');
+    buffer.writeAll(positionalOptional, ', ');
+    buffer.write(']');
+  }
+  if (named.isNotEmpty) {
+    if (buffer.isNotEmpty) buffer.write(', ');
+    buffer.write('{');
+    buffer.writeAll(named, ', ');
+    buffer.write('}');
+  }
+
+  final args = [...positionalArgs];
+  if (namedArgs.isNotEmpty) {
+    args.addAll(namedArgs);
+  }
+
+  return (buffer.toString(), args.join(', '));
 }
