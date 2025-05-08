@@ -134,11 +134,10 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
     final generatedMethods = element.methods.map((method) {
       final preconditionAnnotation = _getAnnotation(method, Precondition);
       final postconditionAnnotation = _getAnnotation(method, Postcondition);
-      final invariantAnnotation = _getAnnotation(method, Invariant);
 
       if (preconditionAnnotation == null &&
           postconditionAnnotation == null &&
-          invariantAnnotation == null) {
+          method.isPrivate) {
         return '';
       }
       final preconditions =
