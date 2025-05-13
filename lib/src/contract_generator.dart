@@ -2,6 +2,7 @@ import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/constant/value.dart';
+import 'package:analyzer/dart/element/type.dart';
 import 'package:source_gen/source_gen.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:build/build.dart';
@@ -140,6 +141,10 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
           method.isPrivate) {
         return '';
       }
+
+      //No support yet
+      if (method.isOperator) return '';
+
       final preconditions =
           preconditionAnnotation?.peek('asserts')?.mapValue ?? {};
       final postconditions =
@@ -164,6 +169,7 @@ class ContractGenerator extends GeneratorForAnnotation<Contract> {
         : '';
 
     return '''
+    // ignore_for_file: unnecessary_cast, unused_element
     class ${element.name.replaceFirst('_', '')}${typeParams} extends ${element.name}${typeParamsNoBounds} {
       
       void _captureValue(Map<String, dynamic> oldValues, String expression, dynamic value) {
@@ -200,6 +206,8 @@ ConstantReader? _getAnnotation(Element element, Type type) {
 String? _generateConstructorPrecondition(ClassElement el) {
   if (el.constructors.isEmpty) return null;
   final result = el.constructors.map((constructor) {
+    if (constructor.isFactory) return '';
+
     final preconditions =
         _getAnnotation(constructor, Precondition)?.peek('asserts')?.mapValue ??
             {};
@@ -209,9 +217,8 @@ String? _generateConstructorPrecondition(ClassElement el) {
       return 'assert(${entry.key!.toStringValue()}, "${entry.value!.toStringValue()}"),';
     }).join('');
 
-    print(constructor.parameters);
     return '''
-      ${el.name.replaceFirst('_', '')}${constructor.name.isNotEmpty ? '.${constructor.name}' : ''}(${parmasAndArgs.$1}) : $checks super(${parmasAndArgs.$2});
+      ${el.name.replaceFirst('_', '')}${constructor.name.isNotEmpty ? '.${constructor.name}' : ''}(${parmasAndArgs.$1}) : $checks super${constructor.name.isNotEmpty ? '.${constructor.name}' : ''}(${parmasAndArgs.$2});
       ''';
   }).join('\n');
 
@@ -278,7 +285,7 @@ String _generateExecutable<T extends ExecutableElement>(
       final result = ${executable.isAsynchronous ? 'await' : ''} ${isMethod ? 'super.' : ''}${executable.name}(${paramsAndArgs.$2});
       ${_generatePostconditionChecks(postconditions)}
       ${classInvariants != null ? _generateChecks(classInvariants) : ''}
-      return result;
+      return result ${executable.returnType is VoidType ? '' : 'as ${executable.returnType}'};
     }
     ''';
 
