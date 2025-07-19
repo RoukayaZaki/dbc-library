@@ -8,7 +8,6 @@
 
 - ✅ **@Contract** for class-level invariants  
 - ✅ **@Precondition / @Postcondition** for method contracts  
-- ✅ **@Invariant** to enforce class invariants only  
 - ✅ **@FunctionContract** for top-level functions  
 - 🔁 **Support for `old(...)` values** in postconditions  
 - 🚫 **Private method enforcement** — generate safe public wrappers
@@ -45,7 +44,7 @@ part 'bank_account.g.dart';
 @Contract({
   'balance >= overdraftLimit': 'Balance must not be less than the overdraft limit.',
 })
-class BankAccount {
+class _BankAccount {
   double _balance;
   double get balance => _balance;
   
@@ -53,18 +52,15 @@ class BankAccount {
 
   BankAccount(this._balance, this.overdraftLimit);
 
-  @Invariant()
-  void _deposit(double amount) {
+  void deposit(double amount) {
     _balance += amount;
   }
 
-  @Invariant()
-  void _withdraw(double amount) {
+  void withdraw(double amount) {
     _balance -= amount;
   }
 
-  @Invariant()
-  void _resetAccount() {
+  void resetAccount() {
     _balance = 0.0;
   }
 }
@@ -96,10 +92,9 @@ int _doubleValue(int value) => value * 2;
 
 | Annotation         | Applied To         | Purpose                                                 |
 |--------------------|--------------------|----------------------------------------------------------|
-| `@Contract`        | Class              | Defines class-level **invariants**                      |
-| `@Precondition`    | Private Method     | Conditions that must be true **before** execution       |
-| `@Postcondition`   | Private Method     | Conditions that must be true **after** execution        |
-| `@Invariant`       | Private Method     | Enforces class invariants before and after execution        |
+| `@Contract`        | Private Class      | Defines class-level **invariants**                      |
+| `@Precondition`    | Method             | Conditions that must be true **before** execution       |
+| `@Postcondition`   | Method             | Conditions that must be true **after** execution        |
 | `@FunctionContract`| Private Function   | Combines pre and postconditions for top-level functions |
 
 ---
@@ -115,6 +110,13 @@ Use `old(fieldName)` inside postconditions to refer to values **before** method 
 ```
 
 > Note: Only simple fields are supported for `old()` access.
+
+---
+
+## 📄 More Info & Links
+📘 Thesis Paper: Design by Contract for Dart ([PDF](https://drive.google.com/file/d/1CD9uWJVQRxdtW5o8gfaInh9az9EH529c/view?usp=sharing))
+
+🎤 Thesis Presentation: [Slides](https://docs.google.com/presentation/d/1UPTX4EtNPDBuB4VoMic33oKvtq9DWan7ZGMVT7toSMk/edit?usp=sharing)
 
 ---
 
